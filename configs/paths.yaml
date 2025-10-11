@@ -1,0 +1,2 @@
+data_root: "data/chexpert_small"
+splits_dir: "data/splits"
