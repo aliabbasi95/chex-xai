@@ -1,9 +1,28 @@
+# Python cache
 __pycache__/
+*.pyc
+
+# model artifacts
 *.pt
 *.pth
 *.ckpt
-data/
+
+# local datasets under repo
+data/*
+!data/splits/
+!data/README.md
+
+# symlink or local mount can live here safely
+data/chexpert_small/
+
+# outputs & experiment dirs
 outputs/
 wandb/
+
+# virtualenvs
 .venv/
 venv/
+
+# egg-info anywhere (editable install)
+**/*.egg-info/
+
