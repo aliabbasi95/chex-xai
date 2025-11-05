@@ -5,16 +5,16 @@ import os
 import torch
 from omegaconf import OmegaConf
 
-from src.chex_xai.data.chexpert import (
+from chex_xai.data.chexpert import (
     CHEXPERT_LABELS,
     CheXpertConfig,
     build_loaders,
 )
-from src.chex_xai.engine.train import evaluate, train_one_epoch
-from src.chex_xai.models.classifier import MultiLabelClassifier
-from src.chex_xai.utils.checkpoint import save_checkpoint
-from src.chex_xai.utils.ops import count_params
-from src.chex_xai.utils.seed import set_seed
+from chex_xai.engine.train import evaluate, train_one_epoch
+from chex_xai.models.classifier import MultiLabelClassifier
+from chex_xai.utils.checkpoint import save_checkpoint
+from chex_xai.utils.ops import count_params
+from chex_xai.utils.seed import set_seed
 
 
 def build_optimizer(params, cfg):
