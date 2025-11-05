@@ -10,15 +10,15 @@ CheXpert Dataset Loader (chex_xai.data.chexpert)
 """
 
 from __future__ import annotations
+
+import re
 from dataclasses import dataclass
 from pathlib import Path
-import re
-from typing import List, Optional, Tuple
 
 import pandas as pd
 import torch
-from torch.utils.data import Dataset, DataLoader
 from PIL import Image
+from torch.utils.data import DataLoader, Dataset
 
 from .transforms import build_transforms
 
@@ -36,15 +36,18 @@ CHEXPERT_LABELS = [
     "Pleural Other",
     "Fracture",
     "Support Devices",
-    ]
+]
 PATIENT_RE = re.compile(r"(patient\d+)", re.IGNORECASE)
+
 
 def extract_patient_id(path_str: str) -> str:
     m = PATIENT_RE.search(path_str.replace("\\", "/"))
-    if m: return m.group(1)
-    parts = path_str.replace("\\","/").split("/")
+    if m:
+        return m.group(1)
+    parts = path_str.replace("\\", "/").split("/")
     cand = [p for p in parts if p.lower().startswith("patient")]
     return cand[0] if cand else "patientUNK"
+
 
 @dataclass
 class CheXpertConfig:
@@ -55,8 +58,16 @@ class CheXpertConfig:
     num_workers: int = 8
     u_policy: str = "zeros"  # 'zeros' | 'ones' | 'ignore' (baseline: zeros)
 
+
 class CheXpertDataset(Dataset):
-    def __init__(self, df: pd.DataFrame, root: str, img_size: int, is_train: bool, u_policy: str = "zeros"):
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        root: str,
+        img_size: int,
+        is_train: bool,
+        u_policy: str = "zeros",
+    ):
         self.df = df.reset_index(drop=True).copy()
         self.root = Path(root)
         self.is_train = is_train
@@ -68,18 +79,23 @@ class CheXpertDataset(Dataset):
 
     def _map_value(self, v):
         # v ∈ {1, 0, -1, NaN}
-        if pd.isna(v): return 0.0
-        if v == 1: return 1.0
-        if v == 0: return 0.0
+        if pd.isna(v):
+            return 0.0
+        if v == 1:
+            return 1.0
+        if v == 0:
+            return 0.0
         if v == -1:
-            return 0.0 if self.u_policy == "zeros" else (1.0 if self.u_policy == "ones" else 0.0)
+            return (
+                0.0
+                if self.u_policy == "zeros"
+                else (1.0 if self.u_policy == "ones" else 0.0)
+            )
         return float(v)
 
     def _build_targets(self, subdf: pd.DataFrame) -> torch.Tensor:
         mapped = (
-             subdf.apply(lambda col: col.map(self._map_value))
-             .astype("float32")
-             .values
+            subdf.apply(lambda col: col.map(self._map_value)).astype("float32").values
         )
         return torch.from_numpy(mapped)
 
@@ -92,27 +108,51 @@ class CheXpertDataset(Dataset):
         if not img_path.exists():
             img_path = self.root / Path(row["Path"]).name  # کمکی
         img = Image.open(img_path).convert("L")  # خاکستری
-        x = self.tfm(img)                        # → 3×H×W
+        x = self.tfm(img)  # → 3×H×W
 
         y = self.Y[idx]
         pid = row.get("patient_id", extract_patient_id(str(row["Path"])))
         return {"image": x, "target": y, "path": str(img_path), "patient_id": pid}
 
+
 def build_loaders(cfg: CheXpertConfig):
     splits = Path(cfg.splits_dir)
-    root   = cfg.data_root
+    root = cfg.data_root
 
     df_train = pd.read_csv(splits / "train.csv")
-    df_dev   = pd.read_csv(splits / "dev.csv")
-    df_test  = pd.read_csv(splits / "test.csv")
+    df_dev = pd.read_csv(splits / "dev.csv")
+    df_test = pd.read_csv(splits / "test.csv")
 
-    ds_train = CheXpertDataset(df_train, root=root, img_size=cfg.img_size, is_train=True,  u_policy=cfg.u_policy)
-    ds_dev   = CheXpertDataset(df_dev,   root=root, img_size=cfg.img_size, is_train=False, u_policy=cfg.u_policy)
-    ds_test  = CheXpertDataset(df_test,  root=root, img_size=cfg.img_size, is_train=False, u_policy=cfg.u_policy)
+    ds_train = CheXpertDataset(
+        df_train, root=root, img_size=cfg.img_size, is_train=True, u_policy=cfg.u_policy
+    )
+    ds_dev = CheXpertDataset(
+        df_dev, root=root, img_size=cfg.img_size, is_train=False, u_policy=cfg.u_policy
+    )
+    ds_test = CheXpertDataset(
+        df_test, root=root, img_size=cfg.img_size, is_train=False, u_policy=cfg.u_policy
+    )
 
-    dl_train = DataLoader(ds_train, batch_size=cfg.batch_size, shuffle=True,  num_workers=cfg.num_workers, pin_memory=True)
-    dl_dev   = DataLoader(ds_dev,   batch_size=cfg.batch_size, shuffle=False, num_workers=cfg.num_workers, pin_memory=True)
-    dl_test  = DataLoader(ds_test,  batch_size=cfg.batch_size, shuffle=False, num_workers=cfg.num_workers, pin_memory=True)
+    dl_train = DataLoader(
+        ds_train,
+        batch_size=cfg.batch_size,
+        shuffle=True,
+        num_workers=cfg.num_workers,
+        pin_memory=True,
+    )
+    dl_dev = DataLoader(
+        ds_dev,
+        batch_size=cfg.batch_size,
+        shuffle=False,
+        num_workers=cfg.num_workers,
+        pin_memory=True,
+    )
+    dl_test = DataLoader(
+        ds_test,
+        batch_size=cfg.batch_size,
+        shuffle=False,
+        num_workers=cfg.num_workers,
+        pin_memory=True,
+    )
 
     return ds_train, ds_dev, ds_test, dl_train, dl_dev, dl_test
-

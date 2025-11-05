@@ -2,6 +2,12 @@
 __pycache__/
 *.pyc
 
+# PyCharm / JetBrains
+.idea/
+*.iws
+out/
+atlassian-ide-plugin.xml
+
 # model artifacts
 *.pt
 *.pth
@@ -25,4 +31,3 @@ venv/
 
 # egg-info anywhere (editable install)
 **/*.egg-info/
-

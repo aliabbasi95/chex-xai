@@ -1,12 +1,55 @@
-seed: 1337
+# configs/train.yaml
+
+experiment: "chexpert_baseline_v1"
+
+seed: 42
 device: "cuda"
-batch_size: 32
-num_workers: 8
-epochs: 5
-lr: 3e-4
-img_size: 320
-model: "densenet121"
-loss: "bce"
-ckpt_dir: "outputs/ckpts"
-log_dir: "outputs/tb"
+
+data:
+  batch_size: 16
+  num_workers: 4
+  img_size: 320
+  augment: true
+
+model:
+  name: "densenet121"
+  pretrained: true
+  dropout: 0.2
+
+optim:
+  name: "adamw"
+  lr: 3e-4
+  weight_decay: 1e-4
+
+sched:
+  name: "cosine"
+  t_max: 3
+  min_lr: 1e-6
+
+train:
+  epochs: 3
+  amp: true
+  grad_clip: 1.0
+  val_interval: 1
+  save_best: true
+
+log:
+  print_every: 50
+
 threshold: 0.5
+
+labels:
+  names:
+    - "Enlarged Cardiomediastinum"
+    - "Cardiomegaly"
+    - "Lung Opacity"
+    - "Lung Lesion"
+    - "Edema"
+    - "Consolidation"
+    - "Pneumonia"
+    - "Atelectasis"
+    - "Pneumothorax"
+    - "Pleural Effusion"
+    - "Pleural Other"
+    - "Fracture"
+    - "Support Devices"
