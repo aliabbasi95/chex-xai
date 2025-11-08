@@ -1,6 +1,6 @@
 # src/chex_xai/engine/train.py
 
-from typing import Dict
+from typing import Dict, Optional
 
 import torch
 import torch.nn as nn
@@ -18,23 +18,25 @@ def train_one_epoch(
     amp: bool = True,
     grad_clip: float = 0.0,
     print_every: int = 50,
+    pos_weight: Optional[torch.Tensor] = None,
 ) -> Dict[str, float]:
     """
-    Single training epoch. Expects dataloader batches shaped as dict:
-      {"image": Tensor[B, C, H, W], "target": Tensor[B, K], ...}
-    Returns dict with the average loss across the epoch.
+    Single training epoch. Returns dict of average loss.
     """
     model.train()
-    criterion = nn.BCEWithLogitsLoss()
+    # build criterion once; move pos_weight to device if provided
+    criterion = nn.BCEWithLogitsLoss(
+        pos_weight=pos_weight.to(device) if pos_weight is not None else None
+    )
     scaler = GradScaler(enabled=amp)
 
     loss_meter = AverageMeter()
 
     for step, batch in enumerate(loader):
-        # Unpack dict batch
-        xb, yb = batch["image"], batch["target"]
-        xb, yb = to_device((xb, yb), device)
+        xb = batch["image"]
+        yb = batch["target"]
 
+        xb, yb = to_device((xb, yb), device)
         optimizer.zero_grad(set_to_none=True)
 
         with autocast(enabled=amp):
@@ -63,19 +65,25 @@ def evaluate(
     loader,
     device: torch.device,
     amp: bool = True,
+    pos_weight: Optional[torch.Tensor] = None,
 ) -> Dict[str, float]:
     """
-    Validation loop. Consumes dict batches and reports loss + AUROC metrics.
+    Run validation and compute loss + AUROC metrics.
+    Use the same pos_weight as training for consistent loss scale.
     """
     model.eval()
-    criterion = nn.BCEWithLogitsLoss()
+    criterion = nn.BCEWithLogitsLoss(
+        pos_weight=pos_weight.to(device) if pos_weight is not None else None
+    )
 
     loss_meter = AverageMeter()
     all_logits = []
     all_targets = []
 
     for batch in loader:
-        xb, yb = batch["image"], batch["target"]
+        xb = batch["image"]
+        yb = batch["target"]
+
         xb, yb = to_device((xb, yb), device)
 
         with autocast(enabled=amp):
@@ -96,7 +104,7 @@ def evaluate(
         "auroc_macro": auroc_macro,
         "auroc_micro": auroc_micro,
     }
-    # Expose per-class AUROC with stable keys
+    # also return per-class under a namespaced key
     for i, v in enumerate(per_class):
         metrics[f"auroc_c{i}"] = v
 

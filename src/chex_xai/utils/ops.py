@@ -36,3 +36,19 @@ class AverageMeter:
 def count_params(model: torch.nn.Module) -> int:
     """Return the number of trainable parameters."""
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+def compute_pos_weight(targets: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    """
+    Compute per-class positive weights for BCEWithLogitsLoss.
+    Formula: pos_weight_c = (neg_c + eps) / (pos_c + eps)
+    targets: shape [N, C], values in {0,1}.
+    """
+    if targets.ndim != 2:
+        raise ValueError(f"targets must be 2D [N, C], got shape={tuple(targets.shape)}")
+    # ensure float
+    t = targets.float()
+    pos = t.sum(dim=0)  # [C]
+    neg = t.shape[0] - pos  # [C]
+    pw = (neg + eps) / (pos + eps)  # [C]
+    return pw

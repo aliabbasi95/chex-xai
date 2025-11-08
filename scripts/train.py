@@ -13,7 +13,7 @@ from chex_xai.data.chexpert import (
 from chex_xai.engine.train import evaluate, train_one_epoch
 from chex_xai.models.classifier import MultiLabelClassifier
 from chex_xai.utils.checkpoint import save_checkpoint
-from chex_xai.utils.ops import count_params
+from chex_xai.utils.ops import compute_pos_weight, count_params
 from chex_xai.utils.seed import set_seed
 
 
@@ -62,8 +62,13 @@ def main():
         img_size=cfg_train.data.img_size,
         batch_size=cfg_train.data.batch_size,
         num_workers=cfg_train.data.num_workers,
+        u_policy="zeros",  # keep baseline behavior; can expose in config later
     )
-    ds_tr, ds_dev, ds_te, dl_train, dl_dev, dl_test = build_loaders(dcfg)
+    ds_train, ds_dev, ds_test, dl_train, dl_dev, dl_test = build_loaders(dcfg)
+
+    # Compute pos_weight from TRAIN targets
+    # ds_train.Y shape: [N, C], values {0,1}
+    pos_weight = compute_pos_weight(ds_train.Y)
 
     # Model
     num_classes = len(CHEXPERT_LABELS)
@@ -95,6 +100,7 @@ def main():
             amp=cfg_train.train.amp,
             grad_clip=cfg_train.train.grad_clip,
             print_every=cfg_train.log.print_every,
+            pos_weight=pos_weight,
         )
         print(f"train: loss={tr['loss']:.4f}")
 
@@ -102,7 +108,9 @@ def main():
             scheduler.step()
 
         if (epoch % cfg_train.train.val_interval) == 0:
-            val = evaluate(model, dl_dev, device, amp=cfg_train.train.amp)
+            val = evaluate(
+                model, dl_dev, device, amp=cfg_train.train.amp, pos_weight=pos_weight
+            )
             print(
                 f"valid: loss={val['val_loss']:.4f}  "
                 f"auroc_macro={val['auroc_macro']:.4f}  auroc_micro={val['auroc_micro']:.4f}"
@@ -126,7 +134,9 @@ def main():
                 best_metric = val["auroc_macro"]
 
     print("\nEvaluating on TEST set with the final model weights...")
-    test = evaluate(model, dl_test, device, amp=cfg_train.train.amp)
+    test = evaluate(
+        model, dl_test, device, amp=cfg_train.train.amp, pos_weight=pos_weight
+    )
     print(
         f"test: loss={test['val_loss']:.4f}  "
         f"auroc_macro={test['auroc_macro']:.4f}  auroc_micro={test['auroc_micro']:.4f}"
