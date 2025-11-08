@@ -1,13 +1,18 @@
 # src/chex_xai/engine/train.py
 
-from typing import Dict, Optional
+from typing import Dict
 
 import torch
 import torch.nn as nn
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast  # ← new AMP API
 
 from ..metrics.metrics import compute_auroc
 from ..utils.ops import AverageMeter, to_device
+
+
+def _amp_enabled(device: torch.device, amp: bool) -> bool:
+    """Enable AMP only on CUDA devices to avoid CPU warnings."""
+    return amp and device.type == "cuda"
 
 
 def train_one_epoch(
@@ -18,28 +23,28 @@ def train_one_epoch(
     amp: bool = True,
     grad_clip: float = 0.0,
     print_every: int = 50,
-    pos_weight: Optional[torch.Tensor] = None,
 ) -> Dict[str, float]:
     """
     Single training epoch. Returns dict of average loss.
     """
     model.train()
-    # build criterion once; move pos_weight to device if provided
-    criterion = nn.BCEWithLogitsLoss(
-        pos_weight=pos_weight.to(device) if pos_weight is not None else None
+    criterion = nn.BCEWithLogitsLoss()
+    use_amp = _amp_enabled(device, amp)
+    scaler = GradScaler(
+        device_type="cuda" if device.type == "cuda" else "cpu", enabled=use_amp
     )
-    scaler = GradScaler(enabled=amp)
 
     loss_meter = AverageMeter()
 
     for step, batch in enumerate(loader):
+        # Our dataloader returns dicts: {"image": x, "target": y, ...}
         xb = batch["image"]
         yb = batch["target"]
-
         xb, yb = to_device((xb, yb), device)
+
         optimizer.zero_grad(set_to_none=True)
 
-        with autocast(enabled=amp):
+        with autocast(device_type=device.type, enabled=use_amp):
             logits = model(xb)
             loss = criterion(logits, yb)
 
@@ -65,16 +70,13 @@ def evaluate(
     loader,
     device: torch.device,
     amp: bool = True,
-    pos_weight: Optional[torch.Tensor] = None,
 ) -> Dict[str, float]:
     """
     Run validation and compute loss + AUROC metrics.
-    Use the same pos_weight as training for consistent loss scale.
     """
     model.eval()
-    criterion = nn.BCEWithLogitsLoss(
-        pos_weight=pos_weight.to(device) if pos_weight is not None else None
-    )
+    criterion = nn.BCEWithLogitsLoss()
+    use_amp = _amp_enabled(device, amp)
 
     loss_meter = AverageMeter()
     all_logits = []
@@ -83,10 +85,9 @@ def evaluate(
     for batch in loader:
         xb = batch["image"]
         yb = batch["target"]
-
         xb, yb = to_device((xb, yb), device)
 
-        with autocast(enabled=amp):
+        with autocast(device_type=device.type, enabled=use_amp):
             logits = model(xb)
             loss = criterion(logits, yb)
 
@@ -104,7 +105,6 @@ def evaluate(
         "auroc_macro": auroc_macro,
         "auroc_micro": auroc_micro,
     }
-    # also return per-class under a namespaced key
     for i, v in enumerate(per_class):
         metrics[f"auroc_c{i}"] = v
 
