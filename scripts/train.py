@@ -60,11 +60,10 @@ def main():
         csv_dev="data/splits/dev.csv",
         csv_test="data/splits/test.csv",
         img_size=cfg_train.data.img_size,
-        augment=cfg_train.data.augment,
         batch_size=cfg_train.data.batch_size,
         num_workers=cfg_train.data.num_workers,
     )
-    dl_train, dl_dev, dl_test = build_loaders(dcfg)
+    ds_tr, ds_dev, ds_te, dl_train, dl_dev, dl_test = build_loaders(dcfg)
 
     # Model
     num_classes = len(CHEXPERT_LABELS)

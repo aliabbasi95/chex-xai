@@ -20,7 +20,9 @@ def train_one_epoch(
     print_every: int = 50,
 ) -> Dict[str, float]:
     """
-    Single training epoch. Returns dict of average loss.
+    Single training epoch. Expects dataloader batches shaped as dict:
+      {"image": Tensor[B, C, H, W], "target": Tensor[B, K], ...}
+    Returns dict with the average loss across the epoch.
     """
     model.train()
     criterion = nn.BCEWithLogitsLoss()
@@ -28,7 +30,9 @@ def train_one_epoch(
 
     loss_meter = AverageMeter()
 
-    for step, (xb, yb) in enumerate(loader):
+    for step, batch in enumerate(loader):
+        # Unpack dict batch
+        xb, yb = batch["image"], batch["target"]
         xb, yb = to_device((xb, yb), device)
 
         optimizer.zero_grad(set_to_none=True)
@@ -61,7 +65,7 @@ def evaluate(
     amp: bool = True,
 ) -> Dict[str, float]:
     """
-    Run validation and compute loss + AUROC metrics.
+    Validation loop. Consumes dict batches and reports loss + AUROC metrics.
     """
     model.eval()
     criterion = nn.BCEWithLogitsLoss()
@@ -70,7 +74,8 @@ def evaluate(
     all_logits = []
     all_targets = []
 
-    for xb, yb in loader:
+    for batch in loader:
+        xb, yb = batch["image"], batch["target"]
         xb, yb = to_device((xb, yb), device)
 
         with autocast(enabled=amp):
@@ -91,7 +96,7 @@ def evaluate(
         "auroc_macro": auroc_macro,
         "auroc_micro": auroc_micro,
     }
-    # also return per-class under a namespaced key
+    # Expose per-class AUROC with stable keys
     for i, v in enumerate(per_class):
         metrics[f"auroc_c{i}"] = v
 

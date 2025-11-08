@@ -5,6 +5,8 @@ experiment: "chexpert_baseline_v1"
 seed: 42
 device: "cuda"
 
+use_pos_weight: true
+
 data:
   batch_size: 16
   num_workers: 4
