@@ -34,6 +34,9 @@ train:
   grad_clip: 1.0
   val_interval: 1
   save_best: true
+  early_stopping:
+    patience: 2      # 0 = disabled
+    min_delta: 0.001
 
 log:
   print_every: 50

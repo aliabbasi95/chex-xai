@@ -1,19 +1,18 @@
 # scripts/train.py
 
+import json
 import os
+from datetime import datetime
 
 import torch
 from omegaconf import OmegaConf
 
-from chex_xai.data.chexpert import (
-    CHEXPERT_LABELS,
-    CheXpertConfig,
-    build_loaders,
-)
+from chex_xai.data.chexpert import CHEXPERT_LABELS, CheXpertConfig, build_loaders
 from chex_xai.engine.train import evaluate, train_one_epoch
 from chex_xai.models.classifier import MultiLabelClassifier
 from chex_xai.utils.checkpoint import save_checkpoint
-from chex_xai.utils.ops import compute_pos_weight, count_params
+from chex_xai.utils.earlystop import EarlyStopping
+from chex_xai.utils.ops import count_params
 from chex_xai.utils.seed import set_seed
 
 
@@ -45,13 +44,29 @@ def build_scheduler(optimizer, cfg):
     raise ValueError(f"Unknown scheduler: {cfg.sched.name}")
 
 
+def _dump_json(path, obj):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(obj, f, indent=2)
+
+
 def main():
     # Load configs
     cfg_train = OmegaConf.load("configs/train.yaml")
     cfg_paths = OmegaConf.load("configs/paths.yaml")
 
+    # Seed & device
     set_seed(cfg_train.seed)
     device = torch.device(cfg_train.device if torch.cuda.is_available() else "cpu")
+
+    # Resolve output directory
+    out_dir = os.path.join("outputs", cfg_train.experiment)
+    os.makedirs(out_dir, exist_ok=True)
+
+    # Persist resolved config for reproducibility
+    resolved_yaml = OmegaConf.to_yaml(cfg_train, resolve=True)
+    with open(os.path.join(out_dir, "config_resolved.yaml"), "w") as f:
+        f.write(resolved_yaml)
 
     # Data
     dcfg = CheXpertConfig(
@@ -62,13 +77,10 @@ def main():
         img_size=cfg_train.data.img_size,
         batch_size=cfg_train.data.batch_size,
         num_workers=cfg_train.data.num_workers,
-        u_policy="zeros",  # keep baseline behavior; can expose in config later
+        u_policy="zeros",
     )
-    ds_train, ds_dev, ds_test, dl_train, dl_dev, dl_test = build_loaders(dcfg)
-
-    # Compute pos_weight from TRAIN targets
-    # ds_train.Y shape: [N, C], values {0,1}
-    pos_weight = compute_pos_weight(ds_train.Y)
+    _, dl_dev, dl_test = build_loaders(dcfg)[0:3]  # datasets (unused) if needed later
+    dl_train, dl_dev, dl_test = build_loaders(dcfg)[3:]  # loaders
 
     # Model
     num_classes = len(CHEXPERT_LABELS)
@@ -85,9 +97,13 @@ def main():
     optimizer = build_optimizer(model.parameters(), cfg_train)
     scheduler = build_scheduler(optimizer, cfg_train)
 
+    # Early stopping (optional via config; defaults to disabled)
+    patience = OmegaConf.select(cfg_train, "train.early_stopping.patience") or 0
+    min_delta = OmegaConf.select(cfg_train, "train.early_stopping.min_delta") or 0.0
+    es = EarlyStopping(patience=int(patience), mode="max", min_delta=float(min_delta))
+
     best_metric = -1.0
-    out_dir = os.path.join("outputs", cfg_train.experiment)
-    os.makedirs(out_dir, exist_ok=True)
+    history = []  # keep per-epoch metrics for metrics.json
 
     # Train loop
     for epoch in range(1, cfg_train.train.epochs + 1):
@@ -100,17 +116,15 @@ def main():
             amp=cfg_train.train.amp,
             grad_clip=cfg_train.train.grad_clip,
             print_every=cfg_train.log.print_every,
-            pos_weight=pos_weight,
         )
         print(f"train: loss={tr['loss']:.4f}")
 
         if scheduler is not None:
             scheduler.step()
 
-        if (epoch % cfg_train.train.val_interval) == 0:
-            val = evaluate(
-                model, dl_dev, device, amp=cfg_train.train.amp, pos_weight=pos_weight
-            )
+        do_val = (epoch % cfg_train.train.val_interval) == 0
+        if do_val:
+            val = evaluate(model, dl_dev, device, amp=cfg_train.train.amp)
             print(
                 f"valid: loss={val['val_loss']:.4f}  "
                 f"auroc_macro={val['auroc_macro']:.4f}  auroc_micro={val['auroc_micro']:.4f}"
@@ -130,17 +144,57 @@ def main():
                 ),
                 filename="last.pt",
             )
+
+            # Track best
             if val["auroc_macro"] > best_metric:
                 best_metric = val["auroc_macro"]
 
+            # Append to history and persist metrics.json
+            history.append(
+                {
+                    "epoch": epoch,
+                    "train_loss": tr["loss"],
+                    "val_loss": val["val_loss"],
+                    "val_auroc_macro": val["auroc_macro"],
+                    "val_auroc_micro": val["auroc_micro"],
+                    "time": datetime.utcnow().isoformat() + "Z",
+                }
+            )
+            _dump_json(
+                os.path.join(out_dir, "metrics.json"),
+                {"best_auroc_macro": best_metric, "history": history},
+            )
+
+            # Early stopping check
+            if es.patience > 0 and es.step(val["auroc_macro"]):
+                print(
+                    f"Early stopping: no improvement in {es.patience} val checks. "
+                    f"Best auroc_macro={es.best:.4f}"
+                )
+                break
+
+    # Final TEST evaluation with the current (last) model
     print("\nEvaluating on TEST set with the final model weights...")
-    test = evaluate(
-        model, dl_test, device, amp=cfg_train.train.amp, pos_weight=pos_weight
-    )
+    test = evaluate(model, dl_test, device, amp=cfg_train.train.amp)
     print(
         f"test: loss={test['val_loss']:.4f}  "
         f"auroc_macro={test['auroc_macro']:.4f}  auroc_micro={test['auroc_micro']:.4f}"
     )
+
+    # Persist final test metrics (append into metrics.json)
+    metrics_path = os.path.join(out_dir, "metrics.json")
+    if os.path.exists(metrics_path):
+        with open(metrics_path, "r") as f:
+            obj = json.load(f)
+    else:
+        obj = {"best_auroc_macro": best_metric, "history": history}
+    obj["test"] = {
+        "loss": test["val_loss"],
+        "auroc_macro": test["auroc_macro"],
+        "auroc_micro": test["auroc_micro"],
+        "time": datetime.utcnow().isoformat() + "Z",
+    }
+    _dump_json(metrics_path, obj)
 
 
 if __name__ == "__main__":
